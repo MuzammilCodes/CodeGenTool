@@ -2,6 +2,7 @@
 using System.IO;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using System.Linq;
 
 class Program
 {
@@ -22,6 +23,15 @@ class Program
         string solutionPath = Directory.GetCurrentDirectory();
         Console.WriteLine($"Using current directory: {solutionPath}");
 
+        // Ask for dependency configurator file name
+        Console.Write("Enter the file name where you add dependencies(ex: Program.cs or DependencyConfigurator.cs): ");
+        string dependencyFileName = Console.ReadLine();
+
+        if (string.IsNullOrWhiteSpace(dependencyFileName))
+        {
+            Console.WriteLine("Dependency configurator file name cannot be empty!");
+            return;
+        }
 
         // Ask for methods to include
         var methodsToInclude = GetMethodsToInclude();
@@ -29,9 +39,9 @@ class Program
         try
         {
             GenerateFiles(entityName, solutionPath, methodsToInclude);
-            UpdateDependencyConfigurator(entityName, solutionPath);
+            UpdateDependencyConfigurator(entityName, solutionPath, dependencyFileName);
             Console.WriteLine($"\nAll files generated successfully for entity: {entityName}");
-            Console.WriteLine("DependencyConfigurator updated with new dependencies!");
+            Console.WriteLine("Dependencies updated successfully!");
         }
         catch (Exception ex)
         {
@@ -635,36 +645,159 @@ namespace Audree.DMS.API.Repository.Implementations
         Console.WriteLine($"Generated: {filePath}");
     }
 
-    static void UpdateDependencyConfigurator(string entityName, string solutionPath)
+    static void UpdateDependencyConfigurator(string entityName, string solutionPath, string dependencyFileName)
     {
-        string dependencyConfiguratorPath = Path.Combine(solutionPath, "Audree.DMS.API", "DependencyConfigurations", "DependencyConfigurator.cs");
+        Console.WriteLine($"\nSearching for {dependencyFileName} in all C# microservice API applications...");
 
-        if (!File.Exists(dependencyConfiguratorPath))
+        // Find the dependency configurator file
+        var foundFiles = FindDependencyConfiguratorFiles(solutionPath, dependencyFileName);
+
+        if (!foundFiles.Any())
         {
-            Console.WriteLine($"Warning: DependencyConfigurator.cs not found at {dependencyConfiguratorPath}");
+            Console.WriteLine($"Warning: {dependencyFileName} not found in any C# microservice API applications under {solutionPath}");
             return;
         }
 
-        string fileContent = File.ReadAllText(dependencyConfiguratorPath);
-
-        // Check if dependencies already exist
-        if (fileContent.Contains($"I{entityName}Repository") || fileContent.Contains($"I{entityName}Business"))
+        // Process each found file
+        foreach (var filePath in foundFiles)
         {
-            Console.WriteLine($"Dependencies for {entityName} already exist in DependencyConfigurator.cs");
-            return;
+            Console.WriteLine($"Found: {filePath}");
+            ProcessDependencyFile(entityName, filePath);
+        }
+    }
+
+    static List<string> FindDependencyConfiguratorFiles(string rootPath, string fileName)
+    {
+        var foundFiles = new List<string>();
+
+        try
+        {
+            // Search recursively for the specified file in all subdirectories
+            var files = Directory.GetFiles(rootPath, fileName, SearchOption.AllDirectories);
+
+            foreach (var file in files)
+            {
+                // Check if the file is in a C# project directory (contains .csproj files or typical API structure)
+                var directory = Path.GetDirectoryName(file);
+                if (IsApiProject(directory))
+                {
+                    foundFiles.Add(file);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error searching for files: {ex.Message}");
         }
 
-        // Add repository dependency
-        string repositoryDependency = $"         services.AddTransient<I{entityName}Repository, {entityName}Repository>();";
-        fileContent = AddDependencyToMethod(fileContent, "InjectRepositoryDependencies", repositoryDependency);
+        return foundFiles;
+    }
 
-        // Add business dependency
-        string businessDependency = $"         services.AddTransient<I{entityName}Business, {entityName}Business>();";
-        fileContent = AddDependencyToMethod(fileContent, "InjectBusinessDependencies", businessDependency);
+    static bool IsApiProject(string directory)
+    {
+        if (string.IsNullOrEmpty(directory))
+            return false;
 
-        // Write back to file
-        File.WriteAllText(dependencyConfiguratorPath, fileContent);
-        Console.WriteLine($"Updated: {dependencyConfiguratorPath}");
+        // Check current directory and parent directories for signs of a C# API project
+        var currentDir = new DirectoryInfo(directory);
+
+        while (currentDir != null)
+        {
+            // Look for .csproj files
+            var csprojFiles = currentDir.GetFiles("*.csproj");
+            if (csprojFiles.Any())
+            {
+                // Check if it's likely an API project by looking for common patterns
+                var projectContent = string.Empty;
+                try
+                {
+                    projectContent = File.ReadAllText(csprojFiles.First().FullName);
+                    if (projectContent.Contains("Microsoft.AspNetCore") ||
+                        projectContent.Contains("Web") ||
+                        projectContent.Contains("API") ||
+                        currentDir.Name.Contains("API", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+                catch
+                {
+                    // If we can't read the project file, check by directory structure
+                    if (currentDir.Name.Contains("API", StringComparison.OrdinalIgnoreCase) ||
+                        currentDir.GetDirectories("Controllers").Any() ||
+                        currentDir.GetDirectories("Business").Any() ||
+                        currentDir.GetDirectories("Repository").Any())
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            currentDir = currentDir.Parent;
+        }
+
+        return false;
+    }
+
+    static void ProcessDependencyFile(string entityName, string filePath)
+    {
+        try
+        {
+            string fileContent = File.ReadAllText(filePath);
+
+            // Check if dependencies already exist
+            if (fileContent.Contains($"I{entityName}Repository") || fileContent.Contains($"I{entityName}Business"))
+            {
+                Console.WriteLine($"Dependencies for {entityName} already exist in {filePath}");
+                return;
+            }
+
+            // Repository dependency
+            string repositoryDependency = $"            services.AddTransient<I{entityName}Repository, {entityName}Repository>();";
+
+            // Business dependency  
+            string businessDependency = $"            services.AddTransient<I{entityName}Business, {entityName}Business>();";
+
+            // Try different approaches based on file type
+            bool updated = false;
+
+            // Approach 1: Look for existing InjectRepositoryDependencies and InjectBusinessDependencies methods
+            if (fileContent.Contains("InjectRepositoryDependencies") && fileContent.Contains("InjectBusinessDependencies"))
+            {
+                fileContent = AddDependencyToMethod(fileContent, "InjectRepositoryDependencies", repositoryDependency);
+                fileContent = AddDependencyToMethod(fileContent, "InjectBusinessDependencies", businessDependency);
+                updated = true;
+            }
+            // Approach 2: Look for ConfigureServices method (Program.cs style)
+            else if (fileContent.Contains("ConfigureServices") || fileContent.Contains("builder.Services"))
+            {
+                fileContent = AddDependencyToConfigureServices(fileContent, entityName);
+                updated = true;
+            }
+            // Approach 3: Look for any services.AddTransient patterns and add near them
+            else if (fileContent.Contains("services.AddTransient"))
+            {
+                fileContent = AddDependencyNearExistingServices(fileContent, repositoryDependency, businessDependency);
+                updated = true;
+            }
+
+            if (updated)
+            {
+                File.WriteAllText(filePath, fileContent);
+                Console.WriteLine($"Updated dependencies in: {filePath}");
+            }
+            else
+            {
+                Console.WriteLine($"Warning: Could not determine how to add dependencies to {filePath}");
+                Console.WriteLine("Please manually add the following dependencies:");
+                Console.WriteLine(repositoryDependency);
+                Console.WriteLine(businessDependency);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error processing {filePath}: {ex.Message}");
+        }
     }
 
     static string AddDependencyToMethod(string fileContent, string methodName, string dependency)
@@ -680,16 +813,70 @@ namespace Audree.DMS.API.Repository.Implementations
             string closingBrace = match.Groups[2].Value;
 
             // Add the new dependency before the closing brace
-            string updatedMethod = methodBody + dependency + Environment.NewLine + "     " + closingBrace;
+            string updatedMethod = methodBody + dependency + Environment.NewLine + "        " + closingBrace;
 
             fileContent = fileContent.Replace(match.Value, updatedMethod);
         }
         else
         {
-            Console.WriteLine($"Warning: Could not find method {methodName} in DependencyConfigurator.cs");
+            Console.WriteLine($"Warning: Could not find method {methodName}");
         }
 
         return fileContent;
     }
 
+    static string AddDependencyToConfigureServices(string fileContent, string entityName)
+    {
+        // Repository dependency
+        string repositoryDependency = $"builder.Services.AddTransient<I{entityName}Repository, {entityName}Repository>();";
+
+        // Business dependency  
+        string businessDependency = $"builder.Services.AddTransient<I{entityName}Business, {entityName}Business>();";
+
+        // Look for existing AddTransient calls and add after them
+        var lines = fileContent.Split('\n').ToList();
+
+        int insertIndex = -1;
+        for (int i = lines.Count - 1; i >= 0; i--)
+        {
+            if (lines[i].Contains("builder.Services.AddTransient") || lines[i].Contains("services.AddTransient"))
+            {
+                insertIndex = i + 1;
+                break;
+            }
+        }
+
+        if (insertIndex > 0)
+        {
+            lines.Insert(insertIndex, repositoryDependency);
+            lines.Insert(insertIndex + 1, businessDependency);
+            return string.Join('\n', lines);
+        }
+
+        return fileContent;
+    }
+
+    static string AddDependencyNearExistingServices(string fileContent, string repositoryDependency, string businessDependency)
+    {
+        var lines = fileContent.Split('\n').ToList();
+
+        int insertIndex = -1;
+        for (int i = lines.Count - 1; i >= 0; i--)
+        {
+            if (lines[i].Contains("services.AddTransient"))
+            {
+                insertIndex = i + 1;
+                break;
+            }
+        }
+
+        if (insertIndex > 0)
+        {
+            lines.Insert(insertIndex, repositoryDependency);
+            lines.Insert(insertIndex + 1, businessDependency);
+            return string.Join('\n', lines);
+        }
+
+        return fileContent;
+    }
 }
