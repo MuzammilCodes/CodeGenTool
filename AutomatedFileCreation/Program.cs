@@ -19,11 +19,9 @@ class Program
             return;
         }
 
-        Console.Write("Enter solution path (or press Enter for current directory): ");
-        string solutionPath = Console.ReadLine();
+        string solutionPath = Directory.GetCurrentDirectory();
+        Console.WriteLine($"Using current directory: {solutionPath}");
 
-        if (string.IsNullOrWhiteSpace(solutionPath))
-            solutionPath = Directory.GetCurrentDirectory();
 
         // Ask for methods to include
         var methodsToInclude = GetMethodsToInclude();
@@ -637,7 +635,6 @@ namespace Audree.DMS.API.Repository.Implementations
         Console.WriteLine($"Generated: {filePath}");
     }
 
-    // NEW METHOD: Update DependencyConfigurator
     static void UpdateDependencyConfigurator(string entityName, string solutionPath)
     {
         string dependencyConfiguratorPath = Path.Combine(solutionPath, "Audree.DMS.API", "DependencyConfigurations", "DependencyConfigurator.cs");
@@ -694,4 +691,5 @@ namespace Audree.DMS.API.Repository.Implementations
 
         return fileContent;
     }
+
 }

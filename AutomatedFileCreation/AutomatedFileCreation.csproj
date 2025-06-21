@@ -2,9 +2,25 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net6.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    
+    <!-- Package Configuration -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>codegen</ToolCommandName>
+    <PackageId>CodeGenTool</PackageId>
+    <Version>1.0.5</Version>
+    <Authors>Mohammed Muzamiluddin</Authors>
+    <Description>Automated Controller, Business, and Repository files generator for .NET applications</Description>
+    <PackageTags>dotnet;generator;mvc;controller;repository;business</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
 </Project>
