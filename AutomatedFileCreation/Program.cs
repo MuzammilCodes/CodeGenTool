@@ -20,11 +20,8 @@ class Program
             return;
         }
 
-        Console.Write("Enter solution path (or press Enter for current directory): ");
-        string solutionPath = Console.ReadLine();
-
-        if (string.IsNullOrWhiteSpace(solutionPath))
-            solutionPath = Directory.GetCurrentDirectory();
+        string solutionPath = Directory.GetCurrentDirectory();
+        Console.WriteLine($"Using current directory: {solutionPath}");
 
         // Ask for dependency configurator file name
         Console.Write("Enter the file name where you add dependencies(ex: Program.cs or DependencyConfigurator.cs): ");
