@@ -2,6 +2,7 @@
 using System.IO;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using System.Linq;
 
 class Program
 {
@@ -25,15 +26,25 @@ class Program
         if (string.IsNullOrWhiteSpace(solutionPath))
             solutionPath = Directory.GetCurrentDirectory();
 
+        // Ask for dependency configurator file name
+        Console.Write("Enter the file name where you add dependencies(ex: Program.cs or DependencyConfigurator.cs): ");
+        string dependencyFileName = Console.ReadLine();
+
+        if (string.IsNullOrWhiteSpace(dependencyFileName))
+        {
+            Console.WriteLine("Dependency configurator file name cannot be empty!");
+            return;
+        }
+
         // Ask for methods to include
         var methodsToInclude = GetMethodsToInclude();
 
         try
         {
             GenerateFiles(entityName, solutionPath, methodsToInclude);
-            UpdateDependencyConfigurator(entityName, solutionPath);
+            UpdateDependencyConfigurator(entityName, solutionPath, dependencyFileName);
             Console.WriteLine($"\nAll files generated successfully for entity: {entityName}");
-            Console.WriteLine("DependencyConfigurator updated with new dependencies!");
+            Console.WriteLine("Dependencies updated successfully!");
         }
         catch (Exception ex)
         {
@@ -68,31 +79,105 @@ class Program
         return response == "y" || response == "yes";
     }
 
+    static (string Api, string Business, string Repository, string Model) FindProjectPaths(string solutionPath)
+    {
+        var directories = Directory.GetDirectories(solutionPath);
+
+        string apiPath = null;
+        string businessPath = null;
+        string repositoryPath = null;
+        string modelPath = null;
+
+        foreach (var dir in directories)
+        {
+            var dirName = Path.GetFileName(dir);
+
+            // Find API project (ends with .API but not .API.Something)
+            if (dirName.EndsWith(".API") && !dirName.Contains(".API."))
+            {
+                apiPath = dir;
+            }
+            // Find Business project
+            else if (dirName.EndsWith(".Business") || dirName.EndsWith(".API.Business"))
+            {
+                businessPath = dir;
+            }
+            // Find Repository project
+            else if (dirName.EndsWith(".Repository") || dirName.EndsWith(".API.Repository"))
+            {
+                repositoryPath = dir;
+            }
+            // Find Model project
+            else if (dirName.EndsWith(".Model") || dirName.EndsWith(".API.Model"))
+            {
+                modelPath = dir;
+            }
+        }
+
+        // Validate that all required projects were found
+        if (string.IsNullOrEmpty(apiPath))
+            throw new DirectoryNotFoundException("API project folder not found. Expected folder ending with '.API'");
+
+        if (string.IsNullOrEmpty(businessPath))
+            throw new DirectoryNotFoundException("Business project folder not found. Expected folder ending with '.Business'");
+
+        if (string.IsNullOrEmpty(repositoryPath))
+            throw new DirectoryNotFoundException("Repository project folder not found. Expected folder ending with '.Repository'");
+
+        if (string.IsNullOrEmpty(modelPath))
+            throw new DirectoryNotFoundException("Model project folder not found. Expected folder ending with '.Model'");
+
+        return (apiPath, businessPath, repositoryPath, modelPath);
+    }
+
+    static string GetNamespaceFromPath(string projectPath)
+    {
+        string projectName = Path.GetFileName(projectPath);
+        return projectName;
+    }
     static void GenerateFiles(string entityName, string solutionPath, Dictionary<string, bool> methodsToInclude)
     {
-        var paths = new
+        try
         {
-            Api = Path.Combine(solutionPath, "Audree.DMS.API"),
-            Business = Path.Combine(solutionPath, "Audree.DMS.API.Business"),
-            Repository = Path.Combine(solutionPath, "Audree.DMS.API.Repository"),
-            Model = Path.Combine(solutionPath, "Audree.DMS.API.Model")
-        };
+            // Dynamically find project paths
+            var paths = FindProjectPaths(solutionPath);
 
-        // Create directories
-        CreateDirectoryIfNotExists(Path.Combine(paths.Api, "Controllers"));
-        CreateDirectoryIfNotExists(Path.Combine(paths.Business, "Contracts"));
-        CreateDirectoryIfNotExists(Path.Combine(paths.Business, "Implementations"));
-        CreateDirectoryIfNotExists(Path.Combine(paths.Repository, "Contracts"));
-        CreateDirectoryIfNotExists(Path.Combine(paths.Repository, "Implementations"));
-        CreateDirectoryIfNotExists(paths.Model);
+            // Extract namespaces from project paths
+            var namespaces = new
+            {
+                Api = GetNamespaceFromPath(paths.Api),
+                Business = GetNamespaceFromPath(paths.Business),
+                Repository = GetNamespaceFromPath(paths.Repository),
+                Model = GetNamespaceFromPath(paths.Model),
 
-        // Generate files
-        GenerateController(entityName, paths.Api, methodsToInclude);
-        GenerateBusinessInterface(entityName, paths.Business, methodsToInclude);
-        GenerateBusinessImplementation(entityName, paths.Business, methodsToInclude);
-        GenerateRepositoryInterface(entityName, paths.Repository, methodsToInclude);
-        GenerateRepositoryImplementation(entityName, paths.Repository, methodsToInclude);
-        GenerateModel(entityName, paths.Model);
+            };
+
+            // Create directories
+            CreateDirectoryIfNotExists(Path.Combine(paths.Api, "Controllers"));
+            CreateDirectoryIfNotExists(Path.Combine(paths.Business, "Contracts"));
+            CreateDirectoryIfNotExists(Path.Combine(paths.Business, "Implementations"));
+            CreateDirectoryIfNotExists(Path.Combine(paths.Repository, "Contracts"));
+            CreateDirectoryIfNotExists(Path.Combine(paths.Repository, "Implementations"));
+
+            // Generate files
+            GenerateController(entityName, paths.Api, methodsToInclude, namespaces);
+            GenerateBusinessInterface(entityName, paths.Business, methodsToInclude, namespaces);
+            GenerateBusinessImplementation(entityName, paths.Business, methodsToInclude, namespaces);
+            GenerateRepositoryInterface(entityName, paths.Repository, methodsToInclude, namespaces);
+            GenerateRepositoryImplementation(entityName, paths.Repository, methodsToInclude, namespaces);
+            GenerateModel(entityName, paths.Model, namespaces);
+            GenerateResonseModel(paths.Model, namespaces);
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            Console.WriteLine($"Error: {ex.Message}");
+            Console.WriteLine("\nExpected project structure:");
+            Console.WriteLine("- ProjectName.API");
+            Console.WriteLine("- ProjectName.Business (or ProjectName.API.Business)");
+            Console.WriteLine("- ProjectName.Repository (or ProjectName.API.Repository)");
+            Console.WriteLine("- ProjectName.Model (or ProjectName.API.Model)");
+            throw;
+        }
     }
 
     static void CreateDirectoryIfNotExists(string path)
@@ -104,7 +189,7 @@ class Program
         }
     }
 
-    static void GenerateController(string entityName, string apiPath, Dictionary<string, bool> methods)
+    static void GenerateController(string entityName, string apiPath, Dictionary<string, bool> methods, dynamic namespaces)
     {
         string methodsContent = "";
 
@@ -154,7 +239,7 @@ class Program
 
                 if (id <= 0)
                 {{
-                    response.Message = ApplicationMessages.InputValuesNull;
+                    response.Message = ""Invalid Input"";
                     return Ok(response);
                 }}
 
@@ -191,7 +276,7 @@ class Program
 
                 if ({entityName.ToLower()} == null)
                 {{
-                    response.Message = ApplicationMessages.InputValuesNull;
+                    response.Message = ""Invalid Input"";
                     return Ok(response);
                 }}
 
@@ -200,7 +285,7 @@ class Program
                     var result = await _{entityName.ToLower()}Business.CreateAsync({entityName.ToLower()});
                     response.Success = true;
                     response.Data = result;
-                    response.Message = ApplicationMessages.CreatedSuccessfully;
+                    response.Message = ""Created Successfully"";
                     return Ok(response);
                 }}
                 catch (Exception ex)
@@ -229,7 +314,7 @@ class Program
 
                 if ({entityName.ToLower()} == null)
                 {{
-                    response.Message = ApplicationMessages.InputValuesNull;
+                    response.Message = ""Invalid Input"";
                     return Ok(response);
                 }}
 
@@ -238,7 +323,7 @@ class Program
                     var result = await _{entityName.ToLower()}Business.UpdateAsync({entityName.ToLower()});
                     response.Success = true;
                     response.Data = result;
-                    response.Message = ApplicationMessages.UpdatedSuccessfully;
+                    response.Message = ""Updated Successfully"";
                     return Ok(response);
                 }}
                 catch (Exception ex)
@@ -267,7 +352,7 @@ class Program
 
                 if (id <= 0)
                 {{
-                    response.Message = ApplicationMessages.InputValuesNull;
+                    response.Message = ""Invalid Input"";
                     return Ok(response);
                 }}
 
@@ -276,7 +361,7 @@ class Program
                     var result = await _{entityName.ToLower()}Business.EnableAsync(id);
                     response.Success = true;
                     response.Data = result;
-                    response.Message = ApplicationMessages.EnabledSuccessfully;
+                    response.Message = ""Enabled Successfully"";
                     return Ok(response);
                 }}
                 catch (Exception ex)
@@ -305,7 +390,7 @@ class Program
 
                 if (id <= 0)
                 {{
-                    response.Message = ApplicationMessages.InputValuesNull;
+                    response.Message = ""Invalid Input"";
                     return Ok(response);
                 }}
 
@@ -314,7 +399,7 @@ class Program
                     var result = await _{entityName.ToLower()}Business.DisableAsync(id);
                     response.Success = true;
                     response.Data = result;
-                    response.Message = ApplicationMessages.DisabledSuccessfully;
+                    response.Message = ""Disabled Successfully"";
                     return Ok(response);
                 }}
                 catch (Exception ex)
@@ -328,18 +413,16 @@ class Program
 ";
         }
 
-        string content = $@"using Audree.DMS.API.Business.Contracts;
+        string content = $@"using {namespaces.Business}.Contracts;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using System.Threading.Tasks;
 using System;
-using Audree.DMS.Common.Models;
-using Audree.DMS.Common;
-using Audree.DMS.API.Model;
+using {namespaces.Model};
 using System.Collections.Generic;
 using System.Linq;
 
-namespace Audree.DMS.API.Controllers
+namespace {namespaces.Api}.Controllers
 {{
     [ApiController]
     [Route(""api/[controller]"")]
@@ -362,7 +445,7 @@ namespace Audree.DMS.API.Controllers
         Console.WriteLine($"Generated: {filePath}");
     }
 
-    static void GenerateBusinessInterface(string entityName, string businessPath, Dictionary<string, bool> methods)
+    static void GenerateBusinessInterface(string entityName, string businessPath, Dictionary<string, bool> methods, dynamic namespaces)
     {
         string methodsContent = "";
 
@@ -384,9 +467,11 @@ namespace Audree.DMS.API.Controllers
         if (methods["Disable"])
             methodsContent += $"        Task<bool> DisableAsync(int id);\n";
 
-        string content = $@"using Audree.DMS.API.Model;
+        string content = $@"using {namespaces.Api}.Model;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
-namespace Audree.DMS.API.Business.Contracts
+namespace {namespaces.Business}.Contracts
 {{
     public interface I{entityName}Business
     {{
@@ -398,7 +483,7 @@ namespace Audree.DMS.API.Business.Contracts
         Console.WriteLine($"Generated: {filePath}");
     }
 
-    static void GenerateBusinessImplementation(string entityName, string businessPath, Dictionary<string, bool> methods)
+    static void GenerateBusinessImplementation(string entityName, string businessPath, Dictionary<string, bool> methods, dynamic namespaces)
     {
         string methodsContent = "";
 
@@ -462,11 +547,13 @@ namespace Audree.DMS.API.Business.Contracts
 ";
         }
 
-        string content = $@"using Audree.DMS.API.Business.Contracts;
-using Audree.DMS.API.Repository.Contracts;
-using Audree.DMS.API.Model;
+        string content = $@"using {namespaces.Business}.Contracts;
+using {namespaces.Repository}.Contracts;
+using {namespaces.Model};
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
-namespace Audree.DMS.API.Business.Implementations
+namespace {namespaces.Business}.Implementations
 {{
     public class {entityName}Business : I{entityName}Business
     {{
@@ -484,7 +571,7 @@ namespace Audree.DMS.API.Business.Implementations
         Console.WriteLine($"Generated: {filePath}");
     }
 
-    static void GenerateRepositoryInterface(string entityName, string repositoryPath, Dictionary<string, bool> methods)
+    static void GenerateRepositoryInterface(string entityName, string repositoryPath, Dictionary<string, bool> methods, dynamic namespaces)
     {
         string methodsContent = "";
 
@@ -506,9 +593,11 @@ namespace Audree.DMS.API.Business.Implementations
         if (methods["Disable"])
             methodsContent += $"        Task<bool> DisableAsync(int id);\n";
 
-        string content = $@"using Audree.DMS.API.Model;
+        string content = $@"using {namespaces.Model};
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
-namespace Audree.DMS.API.Repository.Contracts
+namespace {namespaces.Repository}.Contracts
 {{
     public interface I{entityName}Repository
     {{
@@ -520,7 +609,7 @@ namespace Audree.DMS.API.Repository.Contracts
         Console.WriteLine($"Generated: {filePath}");
     }
 
-    static void GenerateRepositoryImplementation(string entityName, string repositoryPath, Dictionary<string, bool> methods)
+    static void GenerateRepositoryImplementation(string entityName, string repositoryPath, Dictionary<string, bool> methods, dynamic namespaces)
     {
         string methodsContent = "";
 
@@ -590,20 +679,22 @@ namespace Audree.DMS.API.Repository.Contracts
 ";
         }
 
-        string content = $@"using Audree.DMS.API.Repository.Contracts;
-using Audree.DMS.API.Model;
+        string content = $@"using {namespaces.Repository}.Contracts;
+using {namespaces.Model};
 using Dapper;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using System;
 
 
-namespace Audree.DMS.API.Repository.Implementations
+namespace {namespaces.Repository}.Implementations
 {{
     public class {entityName}Repository : I{entityName}Repository
     {{
-        private readonly IDMSDbConnection dbConnectionRepository;
+        //you can inject your database connection here
         
-        public {entityName}Repository(IDMSDbConnection dbConnectionRepository)
+        public {entityName}Repository()
         {{
-            this.dbConnectionRepository = dbConnectionRepository;
         }}
 {methodsContent}    }}
 }}";
@@ -613,9 +704,11 @@ namespace Audree.DMS.API.Repository.Implementations
         Console.WriteLine($"Generated: {filePath}");
     }
 
-    static void GenerateModel(string entityName, string modelPath)
+    static void GenerateModel(string entityName, string modelPath, dynamic namespaces)
     {
-        string content = $@"namespace Audree.DMS.API.Model
+        string content = $@"using System;
+
+namespace {namespaces.Model}
 {{
     public class {entityName}
     {{
@@ -636,38 +729,177 @@ namespace Audree.DMS.API.Repository.Implementations
         File.WriteAllText(filePath, content);
         Console.WriteLine($"Generated: {filePath}");
     }
-
-    // NEW METHOD: Update DependencyConfigurator
-    static void UpdateDependencyConfigurator(string entityName, string solutionPath)
+    
+    static void GenerateResonseModel(string modelPath, dynamic namespaces)
     {
-        string dependencyConfiguratorPath = Path.Combine(solutionPath, "Audree.DMS.API", "DependencyConfigurations", "DependencyConfigurator.cs");
+        string content = $@"namespace {namespaces.Model}
+{{
+    public class Response
+    {{
+        public bool Success {{ get; set; }}
+        public string? Message {{ get; set; }}
+        public object? Data {{ get; set; }}
+    }}
+}}";
 
-        if (!File.Exists(dependencyConfiguratorPath))
+        string filePath = Path.Combine(modelPath, $"Response.cs");
+        File.WriteAllText(filePath, content);
+        Console.WriteLine($"Generated: {filePath}");
+    }
+
+    static void UpdateDependencyConfigurator(string entityName, string solutionPath, string dependencyFileName)
+    {
+        Console.WriteLine($"\nSearching for {dependencyFileName} in all C# microservice API applications...");
+
+        // Find the dependency configurator file
+        var foundFiles = FindDependencyConfiguratorFiles(solutionPath, dependencyFileName);
+
+        if (!foundFiles.Any())
         {
-            Console.WriteLine($"Warning: DependencyConfigurator.cs not found at {dependencyConfiguratorPath}");
+            Console.WriteLine($"Warning: {dependencyFileName} not found in any C# microservice API applications under {solutionPath}");
             return;
         }
 
-        string fileContent = File.ReadAllText(dependencyConfiguratorPath);
-
-        // Check if dependencies already exist
-        if (fileContent.Contains($"I{entityName}Repository") || fileContent.Contains($"I{entityName}Business"))
+        // Process each found file
+        foreach (var filePath in foundFiles)
         {
-            Console.WriteLine($"Dependencies for {entityName} already exist in DependencyConfigurator.cs");
-            return;
+            Console.WriteLine($"Found: {filePath}");
+            ProcessDependencyFile(entityName, filePath);
+        }
+    }
+
+    static List<string> FindDependencyConfiguratorFiles(string rootPath, string fileName)
+    {
+        var foundFiles = new List<string>();
+
+        try
+        {
+            // Search recursively for the specified file in all subdirectories
+            var files = Directory.GetFiles(rootPath, fileName, SearchOption.AllDirectories);
+
+            foreach (var file in files)
+            {
+                // Check if the file is in a C# project directory (contains .csproj files or typical API structure)
+                var directory = Path.GetDirectoryName(file);
+                if (IsApiProject(directory))
+                {
+                    foundFiles.Add(file);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error searching for files: {ex.Message}");
         }
 
-        // Add repository dependency
-        string repositoryDependency = $"         services.AddTransient<I{entityName}Repository, {entityName}Repository>();";
-        fileContent = AddDependencyToMethod(fileContent, "InjectRepositoryDependencies", repositoryDependency);
+        return foundFiles;
+    }
 
-        // Add business dependency
-        string businessDependency = $"         services.AddTransient<I{entityName}Business, {entityName}Business>();";
-        fileContent = AddDependencyToMethod(fileContent, "InjectBusinessDependencies", businessDependency);
+    static bool IsApiProject(string directory)
+    {
+        if (string.IsNullOrEmpty(directory))
+            return false;
 
-        // Write back to file
-        File.WriteAllText(dependencyConfiguratorPath, fileContent);
-        Console.WriteLine($"Updated: {dependencyConfiguratorPath}");
+        // Check current directory and parent directories for signs of a C# API project
+        var currentDir = new DirectoryInfo(directory);
+
+        while (currentDir != null)
+        {
+            // Look for .csproj files
+            var csprojFiles = currentDir.GetFiles("*.csproj");
+            if (csprojFiles.Any())
+            {
+                // Check if it's likely an API project by looking for common patterns
+                var projectContent = string.Empty;
+                try
+                {
+                    projectContent = File.ReadAllText(csprojFiles.First().FullName);
+                    if (projectContent.Contains("Microsoft.AspNetCore") ||
+                        projectContent.Contains("Web") ||
+                        projectContent.Contains("API") ||
+                        currentDir.Name.Contains("API", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+                catch
+                {
+                    // If we can't read the project file, check by directory structure
+                    if (currentDir.Name.Contains("API", StringComparison.OrdinalIgnoreCase) ||
+                        currentDir.GetDirectories("Controllers").Any() ||
+                        currentDir.GetDirectories("Business").Any() ||
+                        currentDir.GetDirectories("Repository").Any())
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            currentDir = currentDir.Parent;
+        }
+
+        return false;
+    }
+
+    static void ProcessDependencyFile(string entityName, string filePath)
+    {
+        try
+        {
+            string fileContent = File.ReadAllText(filePath);
+
+            // Check if dependencies already exist
+            if (fileContent.Contains($"I{entityName}Repository") || fileContent.Contains($"I{entityName}Business"))
+            {
+                Console.WriteLine($"Dependencies for {entityName} already exist in {filePath}");
+                return;
+            }
+
+            // Repository dependency
+            string repositoryDependency = $"            services.AddTransient<I{entityName}Repository, {entityName}Repository>();";
+
+            // Business dependency  
+            string businessDependency = $"            services.AddTransient<I{entityName}Business, {entityName}Business>();";
+
+            // Try different approaches based on file type
+            bool updated = false;
+
+            // Approach 1: Look for existing InjectRepositoryDependencies and InjectBusinessDependencies methods
+            if (fileContent.Contains("InjectRepositoryDependencies") && fileContent.Contains("InjectBusinessDependencies"))
+            {
+                fileContent = AddDependencyToMethod(fileContent, "InjectRepositoryDependencies", repositoryDependency);
+                fileContent = AddDependencyToMethod(fileContent, "InjectBusinessDependencies", businessDependency);
+                updated = true;
+            }
+            // Approach 2: Look for ConfigureServices method (Program.cs style)
+            else if (fileContent.Contains("ConfigureServices") || fileContent.Contains("builder.Services"))
+            {
+                fileContent = AddDependencyToConfigureServices(fileContent, entityName);
+                updated = true;
+            }
+            // Approach 3: Look for any services.AddTransient patterns and add near them
+            else if (fileContent.Contains("services.AddTransient"))
+            {
+                fileContent = AddDependencyNearExistingServices(fileContent, repositoryDependency, businessDependency);
+                updated = true;
+            }
+
+            if (updated)
+            {
+                File.WriteAllText(filePath, fileContent);
+                Console.WriteLine($"Updated dependencies in: {filePath}");
+            }
+            else
+            {
+                Console.WriteLine($"Warning: Could not determine how to add dependencies to {filePath}");
+                Console.WriteLine("Please manually add the following dependencies:");
+                Console.WriteLine(repositoryDependency);
+                Console.WriteLine(businessDependency);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error processing {filePath}: {ex.Message}");
+        }
     }
 
     static string AddDependencyToMethod(string fileContent, string methodName, string dependency)
@@ -683,13 +915,91 @@ namespace Audree.DMS.API.Repository.Implementations
             string closingBrace = match.Groups[2].Value;
 
             // Add the new dependency before the closing brace
-            string updatedMethod = methodBody + dependency + Environment.NewLine + "     " + closingBrace;
+            string updatedMethod = methodBody + dependency + Environment.NewLine + "        " + closingBrace;
 
             fileContent = fileContent.Replace(match.Value, updatedMethod);
         }
         else
         {
-            Console.WriteLine($"Warning: Could not find method {methodName} in DependencyConfigurator.cs");
+            Console.WriteLine($"Warning: Could not find method {methodName}");
+        }
+
+        return fileContent;
+    }
+
+    static string AddDependencyToConfigureServices(string fileContent, string entityName)
+    {
+        // Repository and Business dependencies
+        string repositoryDependency = $"builder.Services.AddTransient<I{entityName}Repository, {entityName}Repository>();";
+        string businessDependency = $"builder.Services.AddTransient<I{entityName}Business, {entityName}Business>();";
+
+        var lines = fileContent.Split('\n').ToList();
+
+        int insertIndex = -1;
+        for (int i = lines.Count - 1; i >= 0; i--)
+        {
+            if (lines[i].Contains("builder.Services.AddTransient") || lines[i].Contains("services.AddTransient"))
+            {
+                insertIndex = i + 1;
+                break;
+            }
+        }
+
+        if (insertIndex > 0)
+        {
+            lines.Insert(insertIndex, repositoryDependency);
+            lines.Insert(insertIndex + 1, businessDependency);
+        }
+        else
+        {
+            // No existing AddTransient found — try to insert after DependencyConfigurator if present
+            insertIndex = lines.FindIndex(line => line.Contains("DependencyConfigurator.InjectDependencies"));
+            if (insertIndex >= 0)
+            {
+                lines.Insert(insertIndex + 1, repositoryDependency);
+                lines.Insert(insertIndex + 2, businessDependency);
+            }
+            else
+            {
+                // As a last resort, insert before var app = builder.Build();
+                insertIndex = lines.FindIndex(line => line.Contains("var app = builder.Build()"));
+                if (insertIndex >= 0)
+                {
+                    lines.Insert(insertIndex, repositoryDependency);
+                    lines.Insert(insertIndex + 1, businessDependency);
+                }
+                else
+                {
+                    // Could not find a good spot, append at the end
+                    lines.Add(repositoryDependency);
+                    lines.Add(businessDependency);
+                }
+            }
+        }
+
+        return string.Join('\n', lines);
+    }
+
+
+    static string AddDependencyNearExistingServices(string fileContent, string repositoryDependency, string businessDependency)
+    {
+        var lines = fileContent.Split('\n').ToList();
+
+        int insertIndex = -1;
+        for (int i = lines.Count - 1; i >= 0; i--)
+        {
+            if (lines[i].Contains("services.AddTransient"))
+            {
+                insertIndex = i + 1;
+                break;
+            }
+        }
+
+        if (insertIndex > 0)
+        {
+            lines.Insert(insertIndex, repositoryDependency);
+            lines.Insert(insertIndex + 1, businessDependency);
+            return string.Join('\n', lines);
         }
 
         return fileContent;
