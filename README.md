@@ -1,5 +1,14 @@
 # CodeGenTool
 
+> **How To Install**
+DO NOT directly click Install button in NuGet Package Manager
+
+Here are the simple steps to install and use it:
+1. Open Terminal in Visual Studio (Ctrl + ~)
+2. Type **dotnet tool install --global CodeGenTool --version 1.0.8** then hit Enter
+3. How to use it: in terminal type **CodeGen** hit enter. 
+
+
 > ⚠️ **Prerequisite Project Structure**
 
 Before using this tool, ensure your microservice project follows the naming convention:
